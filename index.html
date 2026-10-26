@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IoT Data Usage Calculator</title>
+<meta name="description" content="Estimate monthly mobile data per IoT device and per fleet, including protocol overhead, TLS handshakes, keepalives, reconnects and firmware downloads.">
+<style>
+:root { --ink: #1c2430; --muted: #5b6573; --rule: #dde1e6; --panel: #f5f3ee; --accent: #2c3b4e; --highlight: #e8a623; --bg: #fffdf9; }
+@media (prefers-color-scheme: dark) { :root { --ink: #e8eaed; --muted: #a5adb8; --rule: #3a414b; --panel: #1f252d; --accent: #d7dee8; --bg: #14181d; } }
+* { box-sizing: border-box; }
+body { margin: 0; font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); background: var(--bg); }
+main { max-width: 1100px; margin: 0 auto; padding: 32px 16px 64px; }
+h1 { margin: 0 0 8px; color: var(--accent); font-size: 32px; }
+.lead { margin: 0 0 32px; color: var(--muted); max-width: 720px; }
+.calc__grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 40px; align-items: start; }
+.form { display: flex; flex-direction: column; gap: 24px; }
+.form__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+fieldset { border: 0; margin: 0; padding: 0; }
+legend { font-weight: 700; font-size: 19px; color: var(--accent); margin-bottom: 12px; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field[hidden] { display: none; }
+label { font-size: 14px; font-weight: 600; }
+input, select { padding: 10px 12px; border: 1px solid var(--rule); border-radius: 4px; font: inherit; color: var(--ink); background: var(--bg); width: 100%; }
+input:focus, select:focus { outline: 3px solid var(--highlight); outline-offset: 0; }
+details { border-top: 1px solid var(--rule); padding-top: 16px; }
+summary { cursor: pointer; font-weight: 700; margin-bottom: 16px; }
+.btn { margin-top: 16px; padding: 10px 16px; font: inherit; font-weight: 600; border: 1px solid var(--rule); border-radius: 4px; background: var(--panel); color: var(--ink); cursor: pointer; }
+.calc__result { position: sticky; top: 16px; background: var(--panel); border-top: 4px solid var(--highlight); padding: 24px; }
+.calc__label { margin: 0; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.calc__figure { margin: 4px 0; font-size: 44px; font-weight: 700; color: var(--accent); }
+.calc__sub { margin: 0 0 16px; color: var(--muted); }
+table { width: 100%; border-collapse: collapse; }
+td { padding: 9px 4px; border-bottom: 1px solid var(--rule); font-size: 15px; }
+td:last-child { text-align: right; white-space: nowrap; }
+.calc__note { font-size: 14px; color: var(--muted); }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+footer { margin-top: 48px; font-size: 14px; color: var(--muted); }
+a { color: var(--accent); }
+@media (max-width: 800px) { .calc__grid { grid-template-columns: minmax(0, 1fr); } .calc__result { position: static; } }
+@media (max-width: 520px) { .form__grid { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<main>
+<h1>IoT data usage calculator</h1>
+<p class="lead">Estimate how much mobile data a device uses in a month, and across a fleet: your payload plus the headers, handshakes, keepalives and reconnects the mobile network meters with it. Decimal units, 30-day month.</p>
+<div class="calc__grid">
+<form class="form calc__form" id="iot-calc" novalidate>
+            <fieldset>
+                <legend>Your devices</legend>
+                <div class="form__grid">
+                    <div class="field">
+                        <label for="devices">Number of devices</label>
+                        <input id="devices" name="devices" type="number" min="1" step="1" value="1" inputmode="numeric" />
+                    </div>
+                    <div class="field">
+                        <label for="payloadBytes">Payload per message (bytes)</label>
+                        <input id="payloadBytes" name="payloadBytes" type="number" min="0" step="1" value="600" inputmode="numeric" />
+                    </div>
+                    <div class="field">
+                        <label for="intervalMinutes">Minutes between messages</label>
+                        <input id="intervalMinutes" name="intervalMinutes" type="number" min="0.1" step="any" value="5" inputmode="decimal" />
+                    </div>
+                    <div class="field">
+                        <label for="largeTransfersMB">Firmware or file downloads per month (MB)</label>
+                        <input id="largeTransfersMB" name="largeTransfersMB" type="number" min="0" step="any" value="0" inputmode="decimal" />
+                    </div>
+                </div>
+            </fieldset>
+
+            <fieldset>
+                <legend>How it connects</legend>
+                <div class="form__grid">
+                    <div class="field">
+                        <label for="protocol">Protocol</label>
+                        <select id="protocol" name="protocol"></select>
+                    </div>
+                    <div class="field">
+                        <label for="connection">Connection</label>
+                        <select id="connection" name="connection">
+                            <option value="persistent">Kept open between messages</option>
+                            <option value="per-message">New connection for every message</option>
+                        </select>
+                    </div>
+                    <div class="field" data-when="persistent">
+                        <label for="reconnectsPerDay">Reconnects per day</label>
+                        <input id="reconnectsPerDay" name="reconnectsPerDay" type="number" min="0" step="any" value="1" inputmode="decimal" />
+                    </div>
+                    <div class="field" data-when="keepalive">
+                        <label for="keepaliveSeconds">MQTT keepalive (seconds)</label>
+                        <input id="keepaliveSeconds" name="keepaliveSeconds" type="number" min="0" step="1" value="300" inputmode="numeric" />
+                    </div>
+                </div>
+            </fieldset>
+
+            <details class="calc__more">
+                <summary>Overheads and assumptions</summary>
+                <div class="form__grid">
+                    <div class="field">
+                        <label for="ipVersion">IP version</label>
+                        <select id="ipVersion" name="ipVersion">
+                            <option value="4">IPv4</option>
+                            <option value="6">IPv6</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label for="handshakeBytes">TLS or DTLS handshake (bytes)</label>
+                        <input id="handshakeBytes" name="handshakeBytes" type="number" min="0" step="1" value="5000" inputmode="numeric" />
+                    </div>
+                    <div class="field">
+                        <label for="requestBytes">Application header per message (bytes)</label>
+                        <input id="requestBytes" name="requestBytes" type="number" min="0" step="1" inputmode="numeric" />
+                    </div>
+                    <div class="field">
+                        <label for="replyBytes">Application reply per message (bytes)</label>
+                        <input id="replyBytes" name="replyBytes" type="number" min="0" step="1" inputmode="numeric" />
+                    </div>
+                    <div class="field">
+                        <label for="downlinkBytesPerDay">Other downlink per day (bytes)</label>
+                        <input id="downlinkBytesPerDay" name="downlinkBytesPerDay" type="number" min="0" step="1" value="0" inputmode="numeric" />
+                    </div>
+                    <div class="field">
+                        <label for="dnsLookupBytes">DNS lookup per connection (bytes)</label>
+                        <input id="dnsLookupBytes" name="dnsLookupBytes" type="number" min="0" step="1" value="100" inputmode="numeric" />
+                    </div>
+                    <div class="field">
+                        <label for="sessionsPerDay">Mobile data sessions per day</label>
+                        <input id="sessionsPerDay" name="sessionsPerDay" type="number" min="0" step="any" value="1" inputmode="decimal" />
+                    </div>
+                    <div class="field">
+                        <label for="billingIncrementKB">Tariff rounding per session (kB)</label>
+                        <input id="billingIncrementKB" name="billingIncrementKB" type="number" min="0" step="any" value="0" inputmode="decimal" />
+                    </div>
+                    <div class="field">
+                        <label for="marginPercent">Safety margin (%)</label>
+                        <input id="marginPercent" name="marginPercent" type="number" min="0" step="1" value="20" inputmode="numeric" />
+                    </div>
+                </div>
+                <button class="btn" type="button" id="iot-calc-reset">Reset to defaults</button>
+            </details>
+        </form>
+
+        <aside class="calc__result" aria-live="polite">
+            <p class="calc__label">Per device, per month</p>
+            <p class="calc__figure" id="r-month">–</p>
+            <p class="calc__sub" id="r-fleet"></p>
+            <table class="spec-table calc__table">
+                <caption class="visually-hidden">Monthly data per device by component</caption>
+                <tbody id="r-breakdown"></tbody>
+            </table>
+            <p class="calc__note" id="r-share"></p>
+            <p class="calc__note" id="r-error" role="alert" hidden></p>
+        </aside>
+</div>
+<footer>Every overhead is an editable assumption, not a measured figure for any device. Method: <a href="https://netavo.com/insights/iot-data-usage">How to estimate IoT data usage</a>. Hosted version: <a href="https://netavo.com/tools/iot-data-usage-calculator">netavo.com/tools/iot-data-usage-calculator</a>. MIT licensed, by <a href="https://netavo.com/services/iot">Netavo</a>.</footer>
+</main>
+<script src="iot-data-engine.js"></script>
+<script src="iot-data-calculator.js"></script>
+</body>
+</html>
